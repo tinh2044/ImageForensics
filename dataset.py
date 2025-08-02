@@ -1,0 +1,213 @@
+import numpy as np
+import torch
+import os
+import cv2
+from pathlib import Path
+import logging
+
+
+class ImageForgeryDataset(torch.utils.data.Dataset):
+    def __init__(self, config, split, transform=None):
+        self.config = config
+        self.split = split
+        self.transform = transform
+
+        data_config = config.get("data", {})
+        self.root = data_config.get("root", "./data")
+        self.input_size = data_config.get("input_size", 224)
+        self.class_names = data_config.get(
+            "class_names", ["Authentic", "AI", "Splicing"]
+        )
+        self.num_classes = data_config.get("num_classes", 3)
+
+        self.data_dir = Path(self.root) / split
+        if not self.data_dir.exists():
+            raise FileNotFoundError(f"Data directory not found: {self.data_dir}")
+
+        self.label2id = {class_name: i for i, class_name in enumerate(self.class_names)}
+        self.id2label = {i: class_name for class_name, i in self.label2id.items()}
+
+        self.samples = self._load_samples()
+
+        logging.info(f"Loaded {len(self.samples)} samples for {split} split")
+        logging.info(f"Class distribution: {self._get_class_distribution()}")
+
+    def _load_samples(self):
+        samples = []
+
+        for class_name in self.class_names:
+            class_dir = self.data_dir / class_name
+            if not class_dir.exists():
+                logging.warning(f"Class directory not found: {class_dir}")
+                continue
+
+            image_extensions = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+            for ext in image_extensions:
+                image_files = list(class_dir.glob(f"*{ext}"))
+                image_files.extend(list(class_dir.glob(f"*{ext.upper()}")))
+
+                for image_file in image_files:
+                    samples.append(
+                        {
+                            "image_path": str(image_file),
+                            "label": self.label2id[class_name],
+                            "class_name": class_name,
+                        }
+                    )
+
+        return samples
+
+    def _get_class_distribution(self):
+        distribution = {}
+        for sample in self.samples:
+            class_name = sample["class_name"]
+            distribution[class_name] = distribution.get(class_name, 0) + 1
+        return distribution
+
+    def _load_and_preprocess_image(self, image_path):
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Cannot load image: {image_path}")
+
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        image = cv2.resize(image, (self.input_size, self.input_size))
+
+        image_tensor = torch.from_numpy(image).float()
+        image_tensor = image_tensor.permute(2, 0, 1)
+        image_tensor = image_tensor / 255.0
+
+        return image_tensor
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+
+        try:
+            image = self._load_and_preprocess_image(sample["image_path"])
+
+            if self.transform:
+                image = self.transform(image)
+
+            return {
+                "images": image,
+                "labels": torch.tensor(sample["label"], dtype=torch.long),
+                "image_path": sample["image_path"],
+                "class_name": sample["class_name"],
+            }
+
+        except Exception as e:
+            logging.error(f"Error loading sample {idx}: {e}")
+            dummy_image = torch.randn(3, self.input_size, self.input_size)
+            return {
+                "images": dummy_image,
+                "labels": torch.tensor(0, dtype=torch.long),
+                "image_path": sample["image_path"],
+                "class_name": "Authentic",
+            }
+
+    def __len__(self):
+        return len(self.samples)
+
+    def data_collator(self, batch):
+        images = torch.stack([item["images"] for item in batch])
+        labels = torch.stack([item["labels"] for item in batch])
+
+        return {"images": images, "labels": labels}
+
+
+class Datasets(torch.utils.data.Dataset):
+    def __init__(self, root, split, shuffle=True, augment=False, transform=None):
+        self.root = root
+        self.split = split
+        self.augment = augment
+        self.transform = transform
+
+        config = {
+            "data": {
+                "root": root,
+                "input_size": 224,
+                "class_names": ["Authentic", "AI", "Splicing"],
+                "num_classes": 3,
+            }
+        }
+
+        self.dataset = ImageForgeryDataset(config, split, transform)
+
+        if shuffle:
+            indices = list(range(len(self.dataset)))
+            np.random.shuffle(indices)
+            self.indices = indices
+        else:
+            self.indices = list(range(len(self.dataset)))
+
+    def class_from_dir(self, dir_path):
+        return {k: i for i, k in enumerate(os.listdir(dir_path))}
+
+    def __getitem__(self, i):
+        return self.dataset[self.indices[i]]
+
+    def apply_augment(self, image):
+        if self.augment and np.random.uniform(0, 1) < 0.4:
+            if self.transform:
+                image = self.transform(image)
+        return image
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def data_collator(self, batch):
+        return self.dataset.data_collator(batch)
+
+
+def create_dataloaders(config, generator=None):
+    from torch.utils.data import DataLoader
+
+    train_config = config.get("training", {})
+    batch_size = train_config.get("batch_size", 4)
+
+    train_dataset = ImageForgeryDataset(config, "train")
+    val_dataset = ImageForgeryDataset(config, "test")
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=generator,
+        collate_fn=train_dataset.data_collator,
+        num_workers=4,
+        pin_memory=True,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=val_dataset.data_collator,
+        num_workers=4,
+        pin_memory=True,
+    )
+
+    return train_loader, val_loader
+
+
+if __name__ == "__main__":
+    config = {
+        "data": {
+            "root": "./data",
+            "input_size": 224,
+            "class_names": ["Authentic", "AI", "Splicing"],
+            "num_classes": 3,
+        }
+    }
+
+    try:
+        dataset = ImageForgeryDataset(config, "train")
+        print(f"Dataset loaded with {len(dataset)} samples")
+
+        if len(dataset) > 0:
+            sample = dataset[0]
+            print(f"Sample keys: {sample.keys()}")
+            print(f"Image shape: {sample['images'].shape}")
+            print(f"Label: {sample['labels']}")
+    except Exception as e:
+        print(f"Error testing dataset: {e}")
