@@ -1,26 +1,18 @@
 #!/bin/bash
-
-EXPERIMENT_NAME=""
-CONFIG_PATH=""
-PRETRAINED_PATH=""
+CONFIG_PATH="configs/sample.yaml"
 SEED=379
-TASK="train"
-DATA_PATH=""
-EPOCHS=200
-LEARNING_RATE=2e-4
-RESUME_CHECKPOINTS=""
-SCHEDULER_FACTOR=0.1
-SCHEDULER_PATIENCE=5
+TASK="train"             # train | test |
+RESUME=0               
+CHECKPOINT_PATH=""    
+
+RESUME_FLAG=""
+if [ "$RESUME" -eq 1 ]; then
+    RESUME_FLAG="--resume"
+fi
 
 python -m main \
-    --experiment_name "$EXPERIMENT_NAME" \
     --config_path "$CONFIG_PATH" \
-    --pretrained_path "$PRETRAINED_PATH" \
     --seed $SEED \
     --task "$TASK" \
-    --data_path "$DATA_PATH" \
-    --epochs $EPOCHS \
-    --lr $LEARNING_RATE \
-    --resume_checkpoints "$RESUME_CHECKPOINTS" \
-    --scheduler_factor $SCHEDULER_FACTOR \
-    --scheduler_patience $SCHEDULER_PATIENCE
+    $RESUME_FLAG \
+    --checkpoint_path "$CHECKPOINT_PATH"

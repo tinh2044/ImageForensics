@@ -1,0 +1,56 @@
+2025-08-02 19:31:08,117 [INFO] Starting test task with config: configs/sample.yaml
+2025-08-02 19:31:08,128 [INFO] Using device: cpu
+2025-08-02 19:31:08,593 [INFO] Model parameters: {'total': 11692648, 'trainable': 11692648}
+2025-08-02 19:35:41,423 [INFO] Starting test task with config: configs/sample.yaml
+2025-08-02 19:35:41,433 [INFO] Using device: cpu
+2025-08-02 19:35:42,109 [INFO] Model parameters: {'total': 45761131, 'trainable': 45761131}
+2025-08-02 19:35:42,129 [INFO] Loaded 120 samples for train split
+2025-08-02 19:35:42,129 [INFO] Class distribution: {'Authentic': 40, 'AI': 40, 'Splicing': 40}
+2025-08-02 19:35:42,146 [INFO] Loaded 60 samples for test split
+2025-08-02 19:35:42,147 [INFO] Class distribution: {'Authentic': 20, 'AI': 20, 'Splicing': 20}
+2025-08-02 19:35:42,148 [INFO] Data loaders created: Train: 30, Val: 15
+2025-08-02 19:35:42,148 [INFO] Testing model with sample data...
+2025-08-02 19:35:57,540 [INFO] Test forward pass successful. Loss: 0.0211
+2025-08-02 19:36:33,671 [INFO] Starting train task with config: configs/sample.yaml
+2025-08-02 19:36:33,679 [INFO] Using device: cpu
+2025-08-02 19:36:34,417 [INFO] Model parameters: {'total': 45761131, 'trainable': 45761131}
+2025-08-02 19:36:34,420 [INFO] Loaded 120 samples for train split
+2025-08-02 19:36:34,420 [INFO] Class distribution: {'Authentic': 40, 'AI': 40, 'Splicing': 40}
+2025-08-02 19:36:34,438 [INFO] Loaded 60 samples for test split
+2025-08-02 19:36:34,438 [INFO] Class distribution: {'Authentic': 20, 'AI': 20, 'Splicing': 20}
+2025-08-02 19:36:34,438 [INFO] Data loaders created: Train: 30, Val: 15
+2025-08-02 19:37:12,610 [INFO] Starting train task with config: configs/sample.yaml
+2025-08-02 19:37:12,613 [INFO] Using device: cpu
+2025-08-02 19:37:13,084 [INFO] Model parameters: {'total': 45761131, 'trainable': 45761131}
+2025-08-02 19:37:13,094 [INFO] Loaded 120 samples for train split
+2025-08-02 19:37:13,095 [INFO] Class distribution: {'Authentic': 40, 'AI': 40, 'Splicing': 40}
+2025-08-02 19:37:13,097 [INFO] Loaded 60 samples for test split
+2025-08-02 19:37:13,098 [INFO] Class distribution: {'Authentic': 20, 'AI': 20, 'Splicing': 20}
+2025-08-02 19:37:13,098 [INFO] Data loaders created: Train: 30, Val: 15
+2025-08-02 19:37:42,876 [INFO] Starting train task with config: configs/sample.yaml
+2025-08-02 19:37:42,876 [INFO] Using device: cpu
+2025-08-02 19:37:43,691 [INFO] Model parameters: {'total': 45761131, 'trainable': 45761131}
+2025-08-02 19:37:43,707 [INFO] Loaded 120 samples for train split
+2025-08-02 19:37:43,707 [INFO] Class distribution: {'Authentic': 40, 'AI': 40, 'Splicing': 40}
+2025-08-02 19:37:43,726 [INFO] Loaded 60 samples for test split
+2025-08-02 19:37:43,727 [INFO] Class distribution: {'Authentic': 20, 'AI': 20, 'Splicing': 20}
+2025-08-02 19:37:43,727 [INFO] Data loaders created: Train: 30, Val: 15
+2025-08-02 19:37:43,729 [INFO] Starting epoch 1/200
+2025-08-02 19:39:16,424 [INFO] Starting train task with config: configs/sample.yaml
+2025-08-02 19:39:16,424 [INFO] Using device: cpu
+2025-08-02 19:39:17,196 [INFO] Model parameters: {'total': 45761131, 'trainable': 45761131}
+2025-08-02 19:39:17,210 [INFO] Loaded 120 samples for train split
+2025-08-02 19:39:17,210 [INFO] Class distribution: {'Authentic': 40, 'AI': 40, 'Splicing': 40}
+2025-08-02 19:39:17,220 [INFO] Loaded 60 samples for test split
+2025-08-02 19:39:17,221 [INFO] Class distribution: {'Authentic': 20, 'AI': 20, 'Splicing': 20}
+2025-08-02 19:39:17,222 [INFO] Data loaders created: Train: 30, Val: 15
+2025-08-02 19:39:17,222 [INFO] Starting epoch 1/200
+2025-08-02 19:41:07,874 [INFO] Starting train task with config: configs/sample.yaml
+2025-08-02 19:41:07,875 [INFO] Using device: cpu
+2025-08-02 19:41:08,611 [INFO] Model parameters: {'total': 45761131, 'trainable': 45761131}
+2025-08-02 19:41:08,645 [INFO] Loaded 120 samples for train split
+2025-08-02 19:41:08,645 [INFO] Class distribution: {'Authentic': 40, 'AI': 40, 'Splicing': 40}
+2025-08-02 19:41:08,664 [INFO] Loaded 60 samples for test split
+2025-08-02 19:41:08,664 [INFO] Class distribution: {'Authentic': 20, 'AI': 20, 'Splicing': 20}
+2025-08-02 19:41:08,664 [INFO] Data loaders created: Train: 30, Val: 15
+2025-08-02 19:41:08,664 [INFO] Starting epoch 1/200
