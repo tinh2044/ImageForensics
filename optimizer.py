@@ -21,21 +21,21 @@ def build_optimizer(config, model):
     if optimizer_name == "adam":
         optimizer = optim.Adam(
             model.parameters(),
-            lr=int(optimizer_config["learning_rate"]),
+            lr=optimizer_config["learning_rate"],
             weight_decay=optimizer_config.get("weight_decay", 0),
             betas=tuple(optimizer_config.get("betas", [0.9, 0.999])),
         )
     elif optimizer_name == "adamw":
         optimizer = optim.AdamW(
             model.parameters(),
-            lr=int(optimizer_config["learning_rate"]),
+            lr=optimizer_config["learning_rate"],
             weight_decay=optimizer_config.get("weight_decay", 0),
             betas=tuple(optimizer_config.get("betas", [0.9, 0.999])),
         )
     elif optimizer_name == "sgd":
         optimizer = optim.SGD(
             model.parameters(),
-            lr=int(optimizer_config["learning_rate"]),
+            lr=optimizer_config["learning_rate"],
             momentum=optimizer_config.get("momentum", 0.9),
             weight_decay=optimizer_config.get("weight_decay", 0),
         )
