@@ -175,7 +175,9 @@ def train_epoch(
     )
 
     for i, data in loop:
+        images = data["images"]
         labels = data["labels"]
+
         optimizer.zero_grad()
 
         loss, logits = model(data)
@@ -218,7 +220,9 @@ def evaluate(model, dataloader, config=None, epoch=0, epochs=0):
 
     with torch.no_grad():
         for i, data in loop:
+            images = data["images"]
             labels = data["labels"]
+
             loss, logits = model(data)
 
             all_loss += loss.item()
@@ -253,6 +257,46 @@ def count_model_parameters(model):
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return {"total": total_params, "trainable": trainable_params}
+
+
+def get_model_info(model, input_shape, device):
+    """Get model information including parameters and FLOPs"""
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    non_trainable_params = total_params - trainable_params
+
+    model_info = {
+        "total_params": total_params,
+        "trainable_params": trainable_params,
+        "non_trainable_params": non_trainable_params,
+    }
+
+    # Try to calculate FLOPs if thop is available
+    try:
+        from thop import profile
+
+        input_tensor = torch.randn(input_shape).to(device)
+        dummy_labels = torch.randint(0, 3, (input_shape[0],)).to(device)
+
+        # Create wrapper function to handle model's expected input format
+        def model_wrapper(x):
+            return model({"images": x, "labels": dummy_labels})[1]  # Return logits
+
+        flops, params = profile(model_wrapper, inputs=(input_tensor,), verbose=False)
+        model_info.update(
+            {
+                "flops": flops,
+                "flops_str": f"{flops / 1e9:.2f}G",
+                "macs_str": f"{flops / 1e6:.2f}M",
+                "params_str": f"{params / 1e6:.2f}M",
+            }
+        )
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"Warning: Could not calculate FLOPs: {e}")
+
+    return model_info
 
 
 def save_metrics(metrics, config, epoch):
@@ -334,6 +378,92 @@ def get_scheduler(optimizer, config):
         )
     else:
         return None
+
+
+def init_distributed_mode(args):
+    """Initialize distributed training if needed"""
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        args.rank = int(os.environ["RANK"])
+        args.world_size = int(os.environ["WORLD_SIZE"])
+        args.gpu = int(os.environ["LOCAL_RANK"])
+    elif "SLURM_PROCID" in os.environ:
+        args.rank = int(os.environ["SLURM_PROCID"])
+        args.gpu = args.rank % torch.cuda.device_count()
+    else:
+        args.rank = 0
+        args.world_size = 1
+        args.gpu = 0
+
+    args.distributed = args.world_size > 1
+
+    if args.distributed:
+        torch.cuda.set_device(args.gpu)
+        args.dist_backend = "nccl"
+        print(
+            "| distributed init (rank {}): {}".format(args.rank, args.dist_url),
+            flush=True,
+        )
+        torch.distributed.init_process_group(
+            backend=args.dist_backend,
+            init_method=args.dist_url,
+            world_size=args.world_size,
+            rank=args.rank,
+        )
+        torch.distributed.barrier()
+        setup_for_distributed(args.rank == 0)
+
+
+def setup_for_distributed(is_master):
+    """Setup for distributed training"""
+    import builtins as __builtin__
+
+    builtin_print = __builtin__.print
+
+    def print(*args, **kwargs):
+        force = kwargs.pop("force", False)
+        if is_master or force:
+            builtin_print(*args, **kwargs)
+
+    __builtin__.print = print
+
+
+def get_rank():
+    """Get current rank for distributed training"""
+    if not is_dist_avail_and_initialized():
+        return 0
+    return torch.distributed.get_rank()
+
+
+def is_dist_avail_and_initialized():
+    """Check if distributed training is available and initialized"""
+    if not torch.distributed.is_available():
+        return False
+    if not torch.distributed.is_initialized():
+        return False
+    return True
+
+
+def save_on_master(*args, **kwargs):
+    """Save only on master process"""
+    if is_main_process():
+        torch.save(*args, **kwargs)
+
+
+def is_main_process():
+    """Check if current process is main process"""
+    return get_rank() == 0
+
+
+def check_state_dict(model, state_dict):
+    """Check if model and state dict are compatible"""
+    model_keys = set(model.state_dict().keys())
+    state_dict_keys = set(state_dict.keys())
+
+    # Check if all model keys are in state dict
+    missing_keys = model_keys - state_dict_keys
+    unexpected_keys = state_dict_keys - model_keys
+
+    return len(missing_keys) == 0
 
 
 if __name__ == "__main__":

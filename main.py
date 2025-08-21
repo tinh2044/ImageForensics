@@ -1,217 +1,306 @@
-import os
-import argparse
-import logging
 import torch
+import torch.backends.cudnn as cudnn
+from torch.utils.data import DataLoader
+import os
+import time
+import argparse
+import json
+import datetime
+import numpy as np
+import yaml
+import random
+from pathlib import Path
+from loguru import logger
 
-from dataset import create_dataloaders
-from models import create_model
-from utils import (
-    load_config,
-    setup_logging,
-    set_random_seed,
-    get_device,
-    get_optimizer,
-    get_scheduler,
-    save_checkpoints,
-    load_checkpoints,
-    train_epoch,
-    evaluate,
-    save_metrics,
-    count_model_parameters,
-)
+from optimizer import build_optimizer, build_scheduler
+from dataset import get_training_set, get_test_set
+from model import create_model
+from opt import train_one_epoch, evaluate_fn
+import utils
 
 
-def get_default_args():
-    parser = argparse.ArgumentParser(add_help=False)
+def get_args_parser():
+    parser = argparse.ArgumentParser("Image Classification Training", add_help=False)
+    parser.add_argument("--batch-size", default=4, type=int)
+    parser.add_argument("--epochs", default=200, type=int)
+
+    parser.add_argument("--finetune", default="", help="finetune from checkpoint")
 
     parser.add_argument(
-        "--config_path",
+        "--world_size", default=1, type=int, help="number of distributed processes"
+    )
+    parser.add_argument(
+        "--dist_url", default="env://", help="url used to set up distributed training"
+    )
+    parser.add_argument("--local_rank", default=0, type=int)
+
+    parser.add_argument(
+        "--device", default="cpu", help="device to use for training / testing"
+    )
+    parser.add_argument("--seed", default=42, type=int)
+    parser.add_argument("--resume", default="", help="resume from checkpoint")
+    parser.add_argument(
+        "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
+    )
+    parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
+    parser.add_argument("--num_workers", default=4, type=int)
+
+    parser.add_argument(
+        "--cfg_path",
         type=str,
-        default="configs/sample.yaml",
-        help="Path to the config file",
+        default="configs/aiot.yaml",
+        help="Path to config file",
     )
-    parser.add_argument(
-        "--task",
-        type=str,
-        default="train",
-        choices=["train", "eval", "test"],
-        help="Task to perform: train, eval, or test",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=379,
-        help="Seed with which to initialize all the random components",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume training from latest checkpoint",
-    )
-    parser.add_argument(
-        "--checkpoint_path",
-        type=str,
-        default="",
-        help="Path to specific checkpoint to load",
-    )
+
+    parser.add_argument("--print_freq", default=10, type=int, help="print frequency")
 
     return parser
 
 
-def load_model_from_config(config, device):
-    model = create_model(config)
-    model.to(device)
+def main(args, cfg):
+    model_dir = cfg["training"]["model_dir"]
+    log_dir = f"{model_dir}/log"
 
-    checkpoint_config = config.get("checkpoint", {})
-    if checkpoint_config.get("resume", False) or checkpoint_config.get(
-        "resume_path", ""
-    ):
-        resume_path = checkpoint_config.get("resume_path", "")
-        if resume_path and os.path.exists(resume_path):
-            logging.info(f"Loading checkpoint from {resume_path}")
-            checkpoint = torch.load(resume_path, map_location=device)
-            if "model" in checkpoint:
-                model.load_state_dict(checkpoint["model"])
-            else:
-                model.load_state_dict(checkpoint)
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-    return model
+    utils.init_distributed_mode(args)
 
+    seed = args.seed + utils.get_rank()
+    # Set seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    cudnn.benchmark = False
 
-def prepare_data_loaders_from_config(config, generator=None):
-    return create_dataloaders(config, generator)
+    # Create datasets
+    cfg_data = cfg["data"]
+    train_data = get_training_set(cfg_data["root"], cfg_data)
+    test_data = get_test_set(cfg_data["root"], cfg_data)
 
-
-def train_model(config, model, train_loader, val_loader, device):
-    train_config = config.get("training", {})
-    total_epochs = train_config.get("total_epochs", 200)
-
-    optimizer = get_optimizer(model, config)
-    scheduler = get_scheduler(optimizer, config)
-
-    start_epoch = 0
-    if config.get("checkpoint", {}).get("resume", False):
-        start_epoch = load_checkpoints(model, optimizer, config, resume=True)
-        logging.info(f"Resuming training from epoch {start_epoch}")
-
-    best_val_acc = 0.0
-    train_losses, train_accs = [], []
-    val_losses, val_accs = [], []
-
-    for epoch in range(start_epoch, total_epochs):
-        logging.info(f"Starting epoch {epoch + 1}/{total_epochs}")
-
-        train_loss, train_acc, train_top5_acc = train_epoch(
-            model, train_loader, optimizer, scheduler, config, epoch, total_epochs
-        )
-
-        model.eval()
-        val_loss, val_acc, val_top5_acc, detailed_metrics = evaluate(
-            model, val_loader, config, epoch, total_epochs
-        )
-        model.train()
-
-        train_losses.append(train_loss)
-        train_accs.append(train_acc)
-        val_losses.append(val_loss)
-        val_accs.append(val_acc)
-
-        logging.info(
-            f"Epoch {epoch + 1}: Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}"
-        )
-        logging.info(
-            f"Epoch {epoch + 1}: Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
-        )
-
-        if detailed_metrics:
-            logging.info(f"Detailed metrics: {detailed_metrics}")
-            save_metrics(detailed_metrics, config, epoch)
-
-        is_best = val_acc > best_val_acc
-        if is_best:
-            best_val_acc = val_acc
-            logging.info(f"New best validation accuracy: {best_val_acc:.4f}")
-
-        save_checkpoints(
-            model, optimizer, config, epoch, metrics=detailed_metrics, is_best=is_best
-        )
-
-    return {
-        "train_losses": train_losses,
-        "train_accs": train_accs,
-        "val_losses": val_losses,
-        "val_accs": val_accs,
-        "best_val_acc": best_val_acc,
-    }
-
-
-def evaluate_model(config, model, val_loader, device):
-    logging.info("Starting model evaluation...")
-
-    model.eval()
-    val_loss, val_acc, val_top5_acc, detailed_metrics = evaluate(
-        model, val_loader, config, epoch=0, epochs=1
+    train_dataloader = DataLoader(
+        train_data,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        collate_fn=train_data.data_collator,
+        shuffle=True,
+        pin_memory=True,
+        drop_last=True,
     )
 
-    logging.info(f"Final Evaluation Results:")
-    logging.info(f"Loss: {val_loss:.4f}")
-    logging.info(f"Accuracy: {val_acc:.4f}")
-    logging.info(f"Top-5 Accuracy: {val_top5_acc:.4f}")
+    test_dataloader = DataLoader(
+        test_data,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        collate_fn=test_data.data_collator,
+        pin_memory=True,
+    )
 
-    if detailed_metrics:
-        logging.info(f"Detailed metrics: {detailed_metrics}")
-        save_metrics(detailed_metrics, config, epoch=0)
+    # Create model
+    model = create_model(cfg)
+    model = model.to(device)
+    n_parameters = utils.count_model_parameters(model)
 
-    return detailed_metrics
+    print(f"Number of parameters: {n_parameters}")
 
+    # Calculate model info
+    input_shape = (
+        args.batch_size,
+        4,
+        cfg_data["input_size"],
+        cfg_data["input_size"],
+    )  # 4 channels for RGB + ELA
+    model_info = utils.get_model_info(model, input_shape, device)
 
-def main(args):
-    config = load_config(args.config_path)
+    print("Model Information:")
+    print(f"  Total parameters: {model_info['total_params']:,}")
+    print(f"  Trainable parameters: {model_info['trainable_params']:,}")
+    print(f"  Non-trainable parameters: {model_info['non_trainable_params']:,}")
 
-    setup_logging(config)
-    logging.info(f"Starting {args.task} task with config: {args.config_path}")
+    if "flops" in model_info:
+        print(f"  FLOPs: {model_info['flops_str']}")
+        print(f"  MACs: {model_info['macs_str']}")
+        print(f"  Parameters (from thop): {model_info['params_str']}")
+    print()
 
-    generator = set_random_seed(args.seed)
+    # Load pretrained model if specified
+    if args.finetune:
+        print(f"Finetuning from {args.finetune}")
+        checkpoint = torch.load(args.finetune, map_location="cpu")
+        ret = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+        print("Missing keys: \n", "\n".join(ret.missing_keys))
+        print("Unexpected keys: \n", "\n".join(ret.unexpected_keys))
 
-    device = get_device(config)
-    logging.info(f"Using device: {device}")
+    # Create optimizer and scheduler
+    optimizer = build_optimizer(config=cfg["training"]["optimization"], model=model)
 
+    # Set initial_lr for optimizer (needed for scheduler resume)
+    for group in optimizer.param_groups:
+        if "initial_lr" not in group:
+            group["initial_lr"] = group["lr"]
+
+    # Update config with total epochs for warmup scheduler
+    cfg["training"]["optimization"]["total_epochs"] = args.epochs
+
+    # Initialize scheduler with correct last_epoch for resume
+    scheduler_last_epoch = -1
     if args.resume:
-        config["checkpoint"]["resume"] = True
-    if args.checkpoint_path:
-        config["checkpoint"]["resume_path"] = args.checkpoint_path
+        print(f"Resume training from {args.resume}")
+        checkpoint = torch.load(args.resume, map_location="cpu")
+        if utils.check_state_dict(model, checkpoint["model_state_dict"]):
+            ret = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+        else:
+            print("Model and state dict are different")
+            raise ValueError("Model and state dict are different")
 
-    model = load_model_from_config(config, device)
+        if "epoch" in checkpoint:
+            scheduler_last_epoch = checkpoint["epoch"]
+        args.start_epoch = checkpoint["epoch"] + 1
+        print("Missing keys: \n", "\n".join(ret.missing_keys))
+        print("Unexpected keys: \n", "\n".join(ret.unexpected_keys))
 
-    param_counts = count_model_parameters(model)
-    logging.info(f"Model parameters: {param_counts}")
-
-    train_loader, val_loader = prepare_data_loaders_from_config(config, generator)
-    logging.info(
-        f"Data loaders created: Train: {len(train_loader)}, Val: {len(val_loader)}"
+    # Create scheduler with correct last_epoch
+    scheduler, scheduler_type = build_scheduler(
+        config=cfg["training"]["optimization"],
+        optimizer=optimizer,
+        last_epoch=scheduler_last_epoch,
     )
 
-    if args.task == "train":
-        results = train_model(config, model, train_loader, val_loader, device)
-        logging.info(
-            f"Training completed. Best validation accuracy: {results['best_val_acc']:.4f}"
+    # Load optimizer and scheduler state if resuming
+    if args.resume:
+        if (
+            not args.eval
+            and "optimizer_state_dict" in checkpoint
+            and "scheduler_state_dict" in checkpoint
+        ):
+            print("Loading optimizer and scheduler")
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            if hasattr(scheduler, "load_state_dict"):
+                scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            print(f"New learning rate : {scheduler.get_last_lr()[0]}")
+
+    # Add loss function and output directory to args
+    args.output_dir = model_dir
+    args.save_images = cfg["evaluation"]["save_images"]
+
+    output_dir = Path(cfg["training"]["model_dir"])
+
+    if args.eval:
+        if not args.resume:
+            logger.warning(
+                "Please specify the trained model: --resume /path/to/best_checkpoint.pth"
+            )
+
+        test_results = evaluate_fn(
+            args,
+            test_dataloader,
+            model,
+            epoch=0,
+            print_freq=args.print_freq,
+            results_path=f"{model_dir}/test_results.json",
+            log_dir=f"{log_dir}/eval/test",
         )
-    elif args.task == "test":
-        logging.info("Testing model with sample data...")
-        model.eval()
-        with torch.no_grad():
-            sample_batch = next(iter(val_loader))
-            sample_batch = {
-                k: v.to(device) if isinstance(v, torch.Tensor) else v
-                for k, v in sample_batch.items()
-            }
-            loss, logits = model(sample_batch)
-            logging.info(f"Test forward pass successful. Loss: {loss.item():.4f}")
+        print(
+            f"Test accuracy of the network on the {len(test_dataloader)} test images: {test_results['accuracy']:.3f}"
+        )
+        print(f"* TEST F1 {test_results['f1']:.3f}")
+        return
+
+    print(f"Training on {device}")
+    print(
+        f"Start training for {args.epochs} epochs and start epoch: {args.start_epoch}"
+    )
+    start_time = time.time()
+    best_accuracy = 0.0
+
+    for epoch in range(args.start_epoch, args.epochs):
+        train_results = train_one_epoch(
+            args,
+            model,
+            train_dataloader,
+            optimizer,
+            epoch,
+            print_freq=args.print_freq,
+            log_dir=f"{log_dir}/train",
+            config=cfg,
+        )
+
+        # Step scheduler
+        if scheduler_type == "ReduceLROnPlateau":
+            scheduler.step(train_results["loss"])
+        else:
+            scheduler.step()
+
+        # Save checkpoint
+        checkpoint_paths = [output_dir / f"checkpoint_{epoch}.pth"]
+        prev_chkpt = output_dir / f"checkpoint_{epoch - 1}.pth"
+        if os.path.exists(prev_chkpt):
+            os.remove(prev_chkpt)
+        for checkpoint_path in checkpoint_paths:
+            utils.save_on_master(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "epoch": epoch,
+                },
+                checkpoint_path,
+            )
+        print()
+
+        # Evaluate
+        test_results = evaluate_fn(
+            args,
+            test_dataloader,
+            model,
+            epoch,
+            print_freq=args.print_freq,
+            log_dir=f"{log_dir}/test",
+        )
+
+        # Save best model
+        if test_results["accuracy"] > best_accuracy:
+            best_accuracy = test_results["accuracy"]
+            checkpoint_paths = [output_dir / "best_checkpoint.pth"]
+            for checkpoint_path in checkpoint_paths:
+                utils.save_on_master(
+                    {
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "scheduler_state_dict": scheduler.state_dict(),
+                        "epoch": epoch,
+                    },
+                    checkpoint_path,
+                )
+
+        print(
+            f"* TEST Accuracy {test_results['accuracy']:.3f} Best Accuracy {best_accuracy:.3f}"
+        )
+
+        # Log results
+        log_results = {
+            **{f"train_{k}": v for k, v in train_results.items()},
+            **{f"test_{k}": v for k, v in test_results.items()},
+            "epoch": epoch,
+            "n_parameters": n_parameters,
+        }
+        print()
+        with (output_dir / "log.txt").open("a") as f:
+            f.write(json.dumps(log_results) + "\n")
+
+    total_time = time.time() - start_time
+    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    print("Training time {}".format(total_time_str))
 
 
 if __name__ == "__main__":
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     parser = argparse.ArgumentParser(
-        "Image Forgery Detection", parents=[get_default_args()], add_help=False
+        "Image Classification", parents=[get_args_parser()]
     )
     args = parser.parse_args()
-    main(args)
+
+    with open(args.cfg_path, "r+", encoding="utf-8") as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+
+    Path(config["training"]["model_dir"]).mkdir(parents=True, exist_ok=True)
+    main(args, config)

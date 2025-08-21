@@ -4,6 +4,7 @@ import os
 import cv2
 from pathlib import Path
 import logging
+import torchvision.transforms as transforms
 
 
 class ImageForgeryDataset(torch.utils.data.Dataset):
@@ -12,13 +13,10 @@ class ImageForgeryDataset(torch.utils.data.Dataset):
         self.split = split
         self.transform = transform
 
-        data_config = config.get("data", {})
-        self.root = data_config.get("root", "./data")
-        self.input_size = data_config.get("input_size", 224)
-        self.class_names = data_config.get(
-            "class_names", ["Authentic", "AI", "Splicing"]
-        )
-        self.num_classes = data_config.get("num_classes", 3)
+        self.root = config.get("root", "./data")
+        self.input_size = config.get("input_size", 224)
+        self.class_names = config.get("class_names", ["authentic", "ai", "splicing"])
+        self.num_classes = config.get("num_classes", 3)
 
         self.data_dir = Path(self.root) / split
         if not self.data_dir.exists():
@@ -41,7 +39,7 @@ class ImageForgeryDataset(torch.utils.data.Dataset):
                 logging.warning(f"Class directory not found: {class_dir}")
                 continue
 
-            image_extensions = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+            image_extensions = [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".TIF"]
             for ext in image_extensions:
                 image_files = list(class_dir.glob(f"*{ext}"))
                 image_files.extend(list(class_dir.glob(f"*{ext.upper()}")))
@@ -115,6 +113,45 @@ class ImageForgeryDataset(torch.utils.data.Dataset):
         return {"images": images, "labels": labels}
 
 
+def get_transforms(config, split="train"):
+    """Get transforms for data augmentation"""
+    config = config.get("data", {})
+    input_size = config.get("input_size", 224)
+    augment = config.get("augment", True)
+
+    if split == "train" and augment:
+        # Training transforms with augmentation
+        transform = transforms.Compose(
+            [
+                transforms.ToPILImage(),
+                transforms.RandomResizedCrop(input_size, scale=(0.8, 1.0)),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomRotation(degrees=10),
+                transforms.ColorJitter(
+                    brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1
+                ),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
+    else:
+        # Validation/test transforms (no augmentation)
+        transform = transforms.Compose(
+            [
+                transforms.ToPILImage(),
+                transforms.Resize((input_size, input_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
+
+    return transform
+
+
 class Datasets(torch.utils.data.Dataset):
     def __init__(self, root, split, shuffle=True, augment=False, transform=None):
         self.root = root
@@ -128,6 +165,7 @@ class Datasets(torch.utils.data.Dataset):
                 "input_size": 224,
                 "class_names": ["Authentic", "AI", "Splicing"],
                 "num_classes": 3,
+                "augment": augment,
             }
         }
 
@@ -159,14 +197,26 @@ class Datasets(torch.utils.data.Dataset):
         return self.dataset.data_collator(batch)
 
 
+def get_training_set(root, config):
+    """Get training dataset with augmentation"""
+    transform = get_transforms(config, split="train")
+    return ImageForgeryDataset(config, "train", transform=transform)
+
+
+def get_test_set(root, config):
+    """Get test dataset without augmentation"""
+    transform = get_transforms(config, split="test")
+    return ImageForgeryDataset(config, "test", transform=transform)
+
+
 def create_dataloaders(config, generator=None):
     from torch.utils.data import DataLoader
 
     train_config = config.get("training", {})
     batch_size = train_config.get("batch_size", 4)
 
-    train_dataset = ImageForgeryDataset(config, "train")
-    val_dataset = ImageForgeryDataset(config, "test")
+    train_dataset = get_training_set(config["data"]["root"], config)
+    val_dataset = get_test_set(config["data"]["root"], config)
 
     train_loader = DataLoader(
         train_dataset,
@@ -197,6 +247,7 @@ if __name__ == "__main__":
             "input_size": 224,
             "class_names": ["Authentic", "AI", "Splicing"],
             "num_classes": 3,
+            "augment": True,
         }
     }
 

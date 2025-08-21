@@ -1,3 +1,6 @@
 __pycache__/
 .history/
 data/
+outputs/
+pretrained_models/
+arch.md
