@@ -77,6 +77,28 @@ class ImageForgeryDataset(torch.utils.data.Dataset):
 
         return image_tensor
 
+    def _apply_advanced_augmentation(self, image_tensor):
+        """Apply advanced augmentation techniques"""
+        # Random Cutout
+        if torch.rand(1).item() < 0.3:
+            height, width = image_tensor.shape[1], image_tensor.shape[2]
+            cutout_size = int(min(height, width) * 0.2)
+            x = torch.randint(0, width - cutout_size, (1,)).item()
+            y = torch.randint(0, height - cutout_size, (1,)).item()
+            image_tensor[:, y : y + cutout_size, x : x + cutout_size] = 0
+
+        # Random Gaussian noise
+        if torch.rand(1).item() < 0.2:
+            noise = torch.randn_like(image_tensor) * 0.1
+            image_tensor = torch.clamp(image_tensor + noise, 0, 1)
+
+        # Random brightness/contrast adjustment
+        if torch.rand(1).item() < 0.3:
+            factor = torch.empty(1).uniform_(0.7, 1.3).item()
+            image_tensor = torch.clamp(image_tensor * factor, 0, 1)
+
+        return image_tensor
+
     def __getitem__(self, idx):
         sample = self.samples[idx]
 
@@ -85,6 +107,12 @@ class ImageForgeryDataset(torch.utils.data.Dataset):
 
             if self.transform:
                 image = self.transform(image)
+
+            # Apply advanced augmentation if enabled
+            if isinstance(self.config, dict) and self.config.get("data", {}).get(
+                "advanced_augment", False
+            ):
+                image = self._apply_advanced_augmentation(image)
 
             return {
                 "images": image,

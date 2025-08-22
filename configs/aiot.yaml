@@ -5,11 +5,12 @@ data:
   val_split: "test"
   shuffle: true
   augment: true
+  advanced_augment: true
   input_size: 224
   num_classes: 3
   class_names:
     - "authentic"
-    - "diffusion" 
+    - "diffusion"
     - "spliced"
 
 device: "cpu" 
@@ -21,13 +22,13 @@ training:
   batch_size: 4
   optimization:
     optimizer: "AdamW"
-    learning_rate: 0.0001
-    weight_decay: 0.00001
+    learning_rate: 0.001
+    weight_decay: 0.001
     betas:
       - 0.9
       - 0.999
     scheduler: "cosineannealinglr"
-    T_max: 200
+    T_max: 150
     eta_min: 0.00001
 
 model:
@@ -36,14 +37,14 @@ model:
   pretrained: true
   input_channels: 3
   hidden_dim: 512
-  dropout: 0.2
+  dropout: 0.5
 
   ela:
     quality: 75
     enabled: false
 
   fft:
-    enabled: false
+    enabled: true
     epsilon: 1e-10
 
   fusion:
