@@ -1,3 +1,7 @@
 __pycache__/
 .history/
-data/
+data/aiot/train/
+outputs/
+pretrained_models/
+arch.md
+*log/

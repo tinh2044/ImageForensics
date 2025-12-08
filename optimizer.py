@@ -10,7 +10,12 @@ from torch.optim.lr_scheduler import (
 
 def build_optimizer(config, model):
     """Build optimizer based on configuration"""
-    optimizer_config = config["optimization"]
+    # Handle both direct config and nested config
+    if "optimization" in config:
+        optimizer_config = config["optimization"]
+    else:
+        optimizer_config = config
+
     optimizer_name = optimizer_config["optimizer"].lower()
 
     if optimizer_name == "adam":
@@ -42,7 +47,12 @@ def build_optimizer(config, model):
 
 def build_scheduler(config, optimizer, last_epoch=-1):
     """Build scheduler based on configuration"""
-    scheduler_config = config["optimization"]
+    # Handle both direct config and nested config
+    if "optimization" in config:
+        scheduler_config = config["optimization"]
+    else:
+        scheduler_config = config
+
     scheduler_name = scheduler_config.get("scheduler", "ReduceLROnPlateau").lower()
 
     if scheduler_name == "cosineannealinglr":

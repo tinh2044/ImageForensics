@@ -1,6 +1,7 @@
 import torch
 
 from utils import calculate_metrics
+from train_opt import save_sample_images
 from logger import MetricLogger, SmoothedValue
 
 
@@ -12,6 +13,7 @@ def train_one_epoch(
     epoch,
     print_freq=10,
     log_dir="logs",
+    config=None,
 ):
     """Train for one epoch"""
     model.train()
@@ -48,6 +50,13 @@ def train_one_epoch(
         accuracy = correct / total if total > 0 else 0.0
         metric_logger.update(accuracy=accuracy)
 
+        # Save sample images occasionally
+        if batch_idx % (print_freq * 5) == 0 and config:
+            class_names = config["data"]["class_names"]
+            save_sample_images(
+                images, logits, labels, batch_idx, epoch, args.output_dir, class_names
+            )
+
     # Gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print(f"Train stats: {metric_logger}")
@@ -55,7 +64,9 @@ def train_one_epoch(
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
-def evaluate_fn(args, data_loader, model, epoch, print_freq=100, log_dir="logs"):
+def evaluate_fn(
+    args, data_loader, model, epoch, print_freq=100, results_path=None, log_dir="logs"
+):
     """Evaluate model"""
     model.eval()
 
@@ -72,15 +83,8 @@ def evaluate_fn(args, data_loader, model, epoch, print_freq=100, log_dir="logs")
             images = batch["images"].to(args.device)
             labels = batch["labels"].to(args.device)
 
-            # Forward pass - model will automatically save ELA and FFT images
-            loss, logits, diff = model(
-                {
-                    "images": images,
-                    "labels": labels,
-                },
-                save_ela_images=True,
-                batch_idx=batch_idx,
-            )
+            # Forward pass
+            loss, logits = model({"images": images, "labels": labels})
 
             # Update loss metric
             metric_logger.update(loss=loss.item())

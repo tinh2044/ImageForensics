@@ -2,9 +2,7 @@ import cv2
 import numpy as np
 import torch
 from torch import nn
-import torch.nn.functional as F
-import os
-from datetime import datetime
+# import torch.nn.functional as F
 
 
 class DWConv(nn.Module):
@@ -55,15 +53,19 @@ class LightBackbone(nn.Module):
         self.bn_proj = nn.BatchNorm2d(d_cnn)
 
     def forward(self, x):
+        # x: N x C_in x H x W
         x = self.conv0(x)
         x = self.bn0(x)
         x = self.act(x)
+
         x = self.ds1(x)
         x = self.ds2(x)
         x = self.ds3(x)
+
         x = self.conv_proj(x)
         x = self.bn_proj(x)
         x = self.act(x)
+
         x = x.mean(dim=(2, 3))
         return x
 
@@ -73,12 +75,13 @@ class FFTExtractor(nn.Module):
         super().__init__()
         self.K = K
         self.d_fft = K * K if d_fft is None else d_fft
-        self.proj = nn.Linear(self.d_fft, self.d_fft)
+        self.proj = nn.Linear(
+            self.d_fft, self.d_fft
+        )  # identity-size projector (learnable)
         self.norm = nn.LayerNorm(self.d_fft)
 
     def forward(self, gray):
         N, H, W = gray.shape
-
         f = torch.fft.fft2(gray)
         fshift = torch.roll(f, shifts=(H // 2, W // 2), dims=(1, 2))
         mag = torch.abs(fshift)
@@ -90,7 +93,7 @@ class FFTExtractor(nn.Module):
         flat = crop.reshape(N, -1)
         flat = self.norm(flat)
         out = self.proj(flat)
-        return out, log_mag
+        return out
 
 
 def _tensor_to_uint8_rgb(img_tensor):
@@ -101,7 +104,6 @@ def _tensor_to_uint8_rgb(img_tensor):
 def generate_ela_batch(images, quality=75):
     N, C, H, W = images.shape
     elas = []
-
     for i in range(N):
         img = images[i, :3]
         img_uint8 = _tensor_to_uint8_rgb(img)
@@ -114,7 +116,7 @@ def generate_ela_batch(images, quality=75):
             if not ret:
                 ela_gray = np.zeros((H, W), dtype=np.uint8)
             else:
-                dec = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                dec = cv2.imdecode(buf, cv2.IMREAD_COLOR)  # BGR
                 if dec is None:
                     ela_gray = np.zeros((H, W), dtype=np.uint8)
                 else:
@@ -128,7 +130,7 @@ def generate_ela_batch(images, quality=75):
         elas.append(torch.from_numpy(ela_f).unsqueeze(0))
 
     elas = torch.stack(elas, dim=0)
-    return elas, ela_gray
+    return elas
 
 
 class ImageForgeryDetection(nn.Module):
@@ -137,6 +139,7 @@ class ImageForgeryDetection(nn.Module):
         cfg = config or {}
         model_cfg = cfg.get("model", {})
 
+        # sizes
         self.d_cnn = model_cfg.get("cnn_features", 256)
         self.K = model_cfg.get("fft_K", 16)
         self.d_fft = self.K * self.K
@@ -154,106 +157,18 @@ class ImageForgeryDetection(nn.Module):
         )
 
         self.loss_fn = nn.CrossEntropyLoss()
+        # ELA config
         self.ela_enabled = model_cfg.get("ela", {}).get("enabled", True)
         self.ela_quality = model_cfg.get("ela", {}).get("quality", 75)
 
-        # ELA saving configuration
-        self.save_ela = model_cfg.get("ela", {}).get("save_images", True)
-        self.ela_save_dir = model_cfg.get("ela", {}).get("save_dir", "ela_images")
-        self.ela_save_format = model_cfg.get("ela", {}).get("save_format", "png")
-
-        # FFT saving configuration
-        self.save_fft = model_cfg.get("fft", {}).get("save_images", True)
-        self.fft_save_dir = model_cfg.get("fft", {}).get("save_dir", "fft_images")
-        self.fft_save_format = model_cfg.get("fft", {}).get("save_format", "png")
-
-        # Create ELA save directory if needed
-        if self.save_ela and not os.path.exists(self.ela_save_dir):
-            os.makedirs(self.ela_save_dir, exist_ok=True)
-
-        # Create FFT save directory if needed
-        if self.save_fft and not os.path.exists(self.fft_save_dir):
-            os.makedirs(self.fft_save_dir, exist_ok=True)
-
-    def save_fft_images(self, log_mag_tensor, batch_idx=None, prefix="fft"):
-        """
-        Save FFT log magnitude images to disk
-
-        Args:
-            log_mag_tensor: Tensor of shape (N, H, W) containing FFT log magnitude images
-            batch_idx: Optional batch index for naming
-            prefix: Prefix for saved image names
-        """
-        if not self.save_fft:
-            return
-
-        N = log_mag_tensor.shape[0]
-
-        for i in range(N):
-            # Convert tensor to numpy array
-            fft_img = log_mag_tensor[i].cpu().numpy()
-
-            # Normalize to 0-255 range for visualization
-            fft_min = fft_img.min()
-            fft_max = fft_img.max()
-            if fft_max > fft_min:
-                fft_img = ((fft_img - fft_min) / (fft_max - fft_min) * 255).astype(
-                    np.uint8
-                )
-            else:
-                fft_img = np.zeros_like(fft_img, dtype=np.uint8)
-
-            # Generate filename
-            if batch_idx is not None:
-                filename = f"{prefix}_batch{batch_idx}_img{i}.{self.fft_save_format}"
-            else:
-                filename = f"{prefix}_img{i}.{self.fft_save_format}"
-
-            filepath = os.path.join(self.fft_save_dir, filename)
-
-            # Save image
-            cv2.imwrite(filepath, fft_img)
-            print(f"Saved FFT image: {filepath}")
-
-    def save_ela_images(self, ela_tensor, batch_idx=None, prefix="ela"):
-        """
-        Save ELA images to disk
-
-        Args:
-            ela_tensor: Tensor of shape (N, 1, H, W) containing ELA images
-            batch_idx: Optional batch index for naming
-            prefix: Prefix for saved image names
-        """
-        if not self.save_ela:
-            return
-
-        N = ela_tensor.shape[0]
-
-        for i in range(N):
-            # Convert tensor to numpy array
-            ela_img = ela_tensor[i, 0].cpu().numpy()
-
-            # Normalize to 0-255 range
-            ela_img = (ela_img * 255).astype(np.uint8)
-
-            # Generate filename
-            if batch_idx is not None:
-                filename = f"{prefix}_batch{batch_idx}_img{i}.{self.ela_save_format}"
-            else:
-                filename = f"{prefix}_img{i}.{self.ela_save_format}"
-
-            filepath = os.path.join(self.ela_save_dir, filename)
-
-            # Save image
-            cv2.imwrite(filepath, ela_img)
-            print(f"Saved ELA image: {filepath}")
-
-    def forward(self, src_inputs, save_ela_images=True, batch_idx=None):
+    def forward(self, src_inputs):
         images = src_inputs.get("images", None)
         labels = src_inputs.get("labels", None)
 
         if images is None:
-            raise ValueError("images must be provided in src_inputs")
+            raise ValueError(
+                "images must be provided in src_inputs and be a tensor N x 3 x H x W"
+            )
 
         if not torch.is_tensor(images):
             raise ValueError("images must be a torch tensor")
@@ -263,17 +178,18 @@ class ImageForgeryDetection(nn.Module):
         if C < 3:
             raise ValueError("images must have at least 3 channels (RGB)")
 
-        elas_cpu, diff = generate_ela_batch(
-            images[:, :3, :, :], quality=self.ela_quality
-        )
-        elas = elas_cpu.to(device=device, dtype=images.dtype)
-
-        # Save ELA images if requested
-        if save_ela_images or self.save_ela:
-            self.save_ela_images(elas_cpu, batch_idx, "ela")
+        if self.ela_enabled:
+            elas_cpu = generate_ela_batch(
+                images[:, :3, :, :], quality=self.ela_quality
+            )  # N x 1 x H x W (cpu)
+            elas = elas_cpu.to(device=device, dtype=images.dtype)
+        else:
+            elas = torch.zeros((N, 1, H, W), dtype=images.dtype, device=device)
 
         rgb = images[:, :3, :, :]
+
         combined = torch.cat([rgb, elas], dim=1)
+
         v_cnn = self.backbone(combined)
 
         r = rgb[:, 0, :, :]
@@ -282,11 +198,7 @@ class ImageForgeryDetection(nn.Module):
         gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
         gray = gray * 255.0
 
-        v_fft, log_mag = self.fft_extractor(gray)
-
-        # Save FFT images if requested
-        if save_ela_images or self.save_fft:
-            self.save_fft_images(log_mag, batch_idx, "fft")
+        v_fft = self.fft_extractor(gray)
 
         z = torch.cat([v_cnn, v_fft], dim=1)
         logits = self.classifier(z)
@@ -296,8 +208,7 @@ class ImageForgeryDetection(nn.Module):
             labels = labels.to(logits.device)
             loss = self.loss_fn(logits, labels)
 
-        # Return ELA images along with loss and logits
-        return loss, logits, diff
+        return loss, logits
 
 
 def create_model(config=None):
@@ -305,21 +216,18 @@ def create_model(config=None):
     return ImageForgeryDetection(cfg)
 
 
+# Optional helper to count params
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 if __name__ == "__main__":
-    print("Creating model...")
     model = create_model()
     model.eval()
 
-    print("Running forward pass...")
     x = torch.rand(2, 3, 224, 224)
     inputs = {"images": x}
     with torch.no_grad():
-        loss, logits, diff = model(inputs, save_ela_images=True, batch_idx=0)
-
+        loss, logits = model(inputs)
     print("Logits shape:", logits.shape)
-    print("Diff shape:", diff.shape)
     print("Param count:", count_parameters(model))
