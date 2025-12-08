@@ -1,0 +1,77 @@
+data:
+  dataset_name: "aiot"
+  root: "./data/aiot"
+  train_split: "train"
+  val_split: "test"
+  shuffle: true
+  augment: true
+  input_size: 224
+  num_classes: 3
+  class_names:
+    - "authentic"
+    - "diffusion" 
+    - "spliced"
+
+device: "cpu" 
+
+training:
+  model_dir: "./outputs/aiot"
+  experiment_name: "aiot"
+  total_epochs: 200
+  batch_size: 4
+  optimization:
+    optimizer: "AdamW"
+    learning_rate: 0.0001
+    weight_decay: 0.00001
+    betas:
+      - 0.9
+      - 0.999
+    scheduler: "ReduceLROnPlateau"
+    scheduler_factor: 0.1
+    scheduler_patience: 5
+    warmup_ratio: 0.1
+
+model:
+  name: "ImageForgeryDetection"
+  backbone: "resnet18"
+  pretrained: true
+  input_channels: 3
+  hidden_dim: 512
+  dropout: 0.2
+
+  ela:
+    quality: 75
+    enabled: false
+
+  fft:
+    enabled: false
+    epsilon: 1e-10
+
+  fusion:
+    cnn_features: 1000
+    fft_features: 65536
+    hidden_dim: 512
+    output_dim: 3
+
+evaluation:
+  metrics:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+  save_predictions: true
+  save_confusion_matrix: true
+  save_images: false
+
+logging:
+  level: "INFO"
+  save_logs: true
+  log_interval: 100
+  tensorboard: false
+
+checkpoint:
+  save_dir: "./checkpoints"
+  save_best: true
+  save_last: true
+  resume: false
+  resume_path: "" 
